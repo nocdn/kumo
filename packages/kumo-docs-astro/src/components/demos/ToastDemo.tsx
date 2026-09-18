@@ -176,6 +176,35 @@ export function ToastMultipleDemo() {
   );
 }
 
+function ToastDeduplicatedButton() {
+  const toastManager = useKumoToastManager();
+
+  return (
+    <Button
+      onClick={() =>
+        toastManager.add({
+          id: "deduplicated-toast",
+          title: "This toast already exists",
+          description:
+            "Repeated triggers bump this toast instead of stacking copies.",
+          timeout: 5000,
+        })
+      }
+    >
+      Show same toast
+    </Button>
+  );
+}
+
+/** Reuses a stable ID so repeated triggers bump one toast instead of adding copies. */
+export function ToastDeduplicatedDemo() {
+  return (
+    <Toasty>
+      <ToastDeduplicatedButton />
+    </Toasty>
+  );
+}
+
 function ToastErrorButton() {
   const toastManager = useKumoToastManager();
 

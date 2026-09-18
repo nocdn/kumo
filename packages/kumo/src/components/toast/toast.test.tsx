@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vite-plus/test";
 import { useEffect } from "react";
 import { Toasty, createKumoToastManager, useKumoToastManager } from "./toast";
@@ -60,15 +60,57 @@ describe("Toasty", () => {
       });
     });
 
-    expect(await screen.findByText("Saving complete")).toBeTruthy();
+    const title = await screen.findByText("Saving complete");
+    const bumpLayer = title
+      .closest('[role="dialog"]')
+      ?.querySelector('[data-kumo-part="bump-layer"]');
+
+    expect(bumpLayer?.classList.contains("animate-toast-bump")).toBe(false);
+    expect(bumpLayer?.classList.contains("animate-toast-bump-alternate")).toBe(
+      false,
+    );
   });
 
-  // Duplicate ids dispatched through an external manager must not
-  // produce duplicate DOM nodes. (The exact merge semantics — replace vs
-  // bump — are owned by `wrapManagerMethods` / base-ui and tested
-  // elsewhere; this test only guards against the regression of two
-  // toast roots rendering for the same id.)
-  it("does not render duplicate toast roots for the same id via an external manager", async () => {
+  it("does not bump when a promise toast settles", async () => {
+    const mgr = createKumoToastManager();
+    let resolvePromise!: (value: string) => void;
+    const promise = new Promise<string>((resolve) => {
+      resolvePromise = resolve;
+    });
+
+    render(
+      <Toasty toastManager={mgr}>
+        <div />
+      </Toasty>,
+    );
+
+    let handledPromise!: Promise<string>;
+    act(() => {
+      handledPromise = mgr.promise(promise, {
+        loading: { title: "Saving", timeout: 0 },
+        success: { title: "Saving complete", timeout: 0 },
+        error: { title: "Saving failed", timeout: 0 },
+      });
+    });
+    await screen.findByText("Saving");
+
+    await act(async () => {
+      resolvePromise("saved");
+      await handledPromise;
+    });
+
+    const title = await screen.findByText("Saving complete");
+    const bumpLayer = title
+      .closest('[role="dialog"]')
+      ?.querySelector('[data-kumo-part="bump-layer"]');
+
+    expect(bumpLayer?.classList.contains("animate-toast-bump")).toBe(false);
+    expect(bumpLayer?.classList.contains("animate-toast-bump-alternate")).toBe(
+      false,
+    );
+  });
+
+  it("honors an explicit bump on an initial toast", async () => {
     const mgr = createKumoToastManager();
 
     render(
@@ -78,14 +120,106 @@ describe("Toasty", () => {
     );
 
     act(() => {
-      mgr.add({ id: "dupe", title: "first" });
-      mgr.add({ id: "dupe", title: "second" });
+      mgr.add({ title: "Bump immediately", bump: true, timeout: 0 });
     });
 
-    // Exactly one toast title rendered — not two.
-    await screen.findByText("second");
+    const title = await screen.findByText("Bump immediately");
+    const bumpLayer = title
+      .closest('[role="dialog"]')
+      ?.querySelector('[data-kumo-part="bump-layer"]');
+
+    expect(bumpLayer?.classList.contains("animate-toast-bump-alternate")).toBe(
+      true,
+    );
+  });
+
+  it("bumps one toast for duplicate ids dispatched through an external manager", async () => {
+    const mgr = createKumoToastManager();
+
+    render(
+      <Toasty toastManager={mgr}>
+        <div />
+      </Toasty>,
+    );
+
+    act(() => {
+      mgr.add({ id: "dupe", title: "first", timeout: 0 });
+    });
+
+    const firstTitle = await screen.findByText("first");
+    const firstRoot = firstTitle.closest('[role="dialog"]');
+
+    act(() => {
+      mgr.add({ id: "dupe", title: "second", timeout: 0 });
+    });
+
+    const secondTitle = await screen.findByText("second");
+    const secondRoot = secondTitle.closest('[role="dialog"]');
+    const bumpLayer = secondRoot?.querySelector(
+      '[data-kumo-part="bump-layer"]',
+    );
+
+    expect(firstRoot?.isConnected).toBe(true);
+    expect(secondRoot).toBe(firstRoot);
     const titles = document.querySelectorAll("[data-toast-title]");
     expect(titles).toHaveLength(1);
+    expect(secondRoot?.classList.contains("animate-toast-bump")).toBe(false);
+    expect(bumpLayer?.classList.contains("animate-toast-bump")).toBe(true);
+  });
+
+  it("restarts a rapid duplicate-id bump without replacing its transitioning root", async () => {
+    function DuplicateToastTrigger() {
+      const toasts = useKumoToastManager();
+      return (
+        <button
+          onClick={() =>
+            toasts.add({
+              id: "rapid-dupe",
+              title: "Repeated toast",
+              timeout: 0,
+            })
+          }
+        >
+          Show repeated toast
+        </button>
+      );
+    }
+
+    render(
+      <Toasty>
+        <DuplicateToastTrigger />
+      </Toasty>,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show repeated toast" }),
+    );
+    const title = await screen.findByText("Repeated toast");
+    const root = title.closest('[role="dialog"]');
+    expect(root).toBeTruthy();
+    expect(root?.classList.contains("kumo-toast-root")).toBe(true);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show repeated toast" }),
+    );
+    expect(screen.getAllByText("Repeated toast")).toHaveLength(1);
+    const liveTitle = screen.getByText("Repeated toast");
+    const liveRoot = liveTitle.closest('[role="dialog"]');
+    const bumpLayer = liveRoot?.querySelector('[data-kumo-part="bump-layer"]');
+
+    expect(root?.isConnected).toBe(true);
+    expect(liveRoot).toBe(root);
+    expect(root?.classList.contains("animate-toast-bump")).toBe(false);
+    expect(bumpLayer?.classList.contains("animate-toast-bump")).toBe(true);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show repeated toast" }),
+    );
+    expect(
+      liveRoot
+        ?.querySelector('[data-kumo-part="bump-layer"]')
+        ?.classList.contains("animate-toast-bump-alternate"),
+    ).toBe(true);
   });
 
   // `useKumoToastManager()` inside a tree wrapped with an external manager
